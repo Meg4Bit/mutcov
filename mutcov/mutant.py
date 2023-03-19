@@ -1,4 +1,4 @@
-from testcase import Test
+from mutcov.testcase import Test
 
 class Mutant(object):
     statement: str

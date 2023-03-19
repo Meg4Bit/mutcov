@@ -1,5 +1,5 @@
-import testcase
-import mutant
+from mutcov import testcase
+from mutcov import mutant
 import sys
 import pytest
 import io
@@ -11,7 +11,7 @@ from typing import Iterable
 from typing import List
 from time import time
 from _pytest.config.findpaths import get_dirs_from_args
-from testcase import Test
+from .testcase import Test
 from coverage import CoverageData
 
 DEFAULT_RUNNER = 'python -m pytest -x --assert=plain'
@@ -28,41 +28,72 @@ def main():
         output = buf.getvalue()
     str_list = output.split('\n')[ : -3]
     cov_mod = args[1] #TODO Path(args[0]).resolve().parts[-2]
+    test_cov = {}
     for test in str_list:
         path_root_list = list(Path(args[0]).resolve().parts)[ : -2]
         # path_root_list.remove(path_root_list[-2])
         path_root = Path(path_root_list[0] + "/".join(path_root_list[1:]))
-        pytest.main(args=[str(path_root) + "/" + test] + ['--cov=' + cov_mod])
+        test_path = str(path_root) + "/" + test
+        with io.StringIO() as buf, redirect_stdout(buf):
+            pytest.main(args=[test_path] + ['--cov=' + cov_mod, '-q', '--no-summary', '--no-header']) #TODO rework test path
         cov_data = CoverageData()
         cov_data.read()
-        print(cov_data.lines("/home/pe4enko/.local/lib/python3.10/site-packages/flask/wrappers.py"))
+        test_cov[test_path] = cov_data.lines('/home/pe4enko/Repos/flask/src/flask/templating.py')
+    print(test_cov)
 
     import mutmut
+    import mutmut.cache
     config = mutmut.Config(
         total=0,  # we'll fill this in later!
         swallow_output=False,
         test_command=DEFAULT_RUNNER,
         covered_lines_by_filename=None,
         coverage_data=None,
-        baseline_time_elapsed=time(),
+        baseline_time_elapsed=1.0,
         dict_synonyms='',
         using_testmon=False,
-        tests_dirs=str(path_root) + "/tests",
-        hash_of_tests=mutmut.hash_of_tests(str(path_root) + "/tests"), #None,
+        tests_dirs=[str(path_root) + "/tests"],
+        hash_of_tests='NO TESTS FOUND',
         test_time_multiplier=2.0,
         test_time_base=0.0,
         pre_mutation=None,
         post_mutation=None,
-        paths_to_mutate=mutmut.guess_paths_to_mutate(),
-        mutation_types_to_apply=set(mtype.strip() for mtype in ["decorator"]), # set(mutmut.mutations_by_type.keys()),
+        paths_to_mutate='/home/pe4enko/Repos/flask/src/flask/templating.py',
+        mutation_types_to_apply=set(mtype.strip() for mtype in ["expr_stmt"]), # set(mutmut.mutations_by_type.keys()),
         no_progress=False,
         rerun_all=False
     )
+    from mutmut import Progress
+    output_legend = {
+        "killed": "🎉",
+        "timeout": "⏰",
+        "suspicious": "🤔",
+        "survived": "🙁",
+        "skipped": "🔇",
+    }
+    progress = Progress(total=config.total, output_legend=output_legend, no_progress=False)
     files = mutmut.python_source_files(path_root.joinpath("src"), 'tests')
     for file in files:
-        mutations_by_file = {}
-        mutmut.add_mutations_by_file(mutations_by_file, file, None, config)
-    
+        if file == '/home/pe4enko/Repos/flask/src/flask/templating.py':
+            mutations_by_file = {}
+            mutmut.cache.update_line_numbers(file)
+            mutmut.add_mutations_by_file(mutations_by_file, file, None, config)
+    for mutated_file, mutants in mutations_by_file.items():
+        for mutant in mutants:
+            mutants_killed = progress.killed_mutants
+            for test, lines in test_cov.items():
+                if mutant.line_number + 1 in lines:
+                    # print(mutant.line_number + 1, lines)
+                    mut_by_file = {mutated_file: [mutant]}
+                    config.test_command = "pytest -q --assert=plain " + test
+                    with io.StringIO() as buf, redirect_stdout(buf):
+                        mutmut.run_mutation_tests(config=config, progress=progress, mutations_by_file=mut_by_file)
+                    progress.print()
+                    if progress.killed_mutants > mutants_killed:
+                        break
+                    progress.surviving_mutants -= 1
+            if progress.killed_mutants == mutants_killed:
+                progress.surviving_mutants += 1
     # pytest.main(args=['--cov=/home/pe4enko/Repos/flask/src/flask', '/home/pe4enko/Repos/flask/tests/test_user_error_handler.py::TestGenericHandlers::test_handle_generic'])
     # pytest.main(args=[args[0]] + ['--cov=' + cov_mod])
     # print(sys.path)
